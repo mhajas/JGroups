@@ -174,16 +174,37 @@ public class JDBC_PING2 extends FILE_PING {
     // additional configuration and testing on each database. See JGRP-1440
     protected void writeToDB(PingData data, String clustername) throws SQLException {
         lock.lock();
-        try(Connection connection=getConnection()) {
+        try (Connection connection = getConnection()) {
             if(call_insert_sp != null && insert_sp != null)
                 callInsertStoredProcedure(connection, data, clustername);
             else {
-                delete(connection, clustername, data.getAddress());
-                insert(connection, data, clustername);
+                boolean isAutocommit = connection.getAutoCommit();
+                try {
+                    if (isAutocommit) {
+                        // Always use a transaction for the delete+insert to make it atomic
+                        // to avoid the short moment where there is no entry in the table.
+                        connection.setAutoCommit(false);
+                    }
+                    delete(connection, clustername, data.getAddress());
+                    insert(connection, data, clustername);
+                    if (isAutocommit) {
+                        connection.commit();
+                    }
+                } catch (SQLException e) {
+                    if (isAutocommit) {
+                        connection.rollback();
+                    }
+                    throw e;
+                } finally {
+                    if (isAutocommit) {
+                        connection.setAutoCommit(isAutocommit);
+                    }
+                }
             }
         } finally {
             lock.unlock();
         }
+
     }
 
     protected void remove(String clustername, Address addr) {
